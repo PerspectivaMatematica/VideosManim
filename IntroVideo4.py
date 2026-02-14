@@ -2,171 +2,196 @@ from manim import *
 import numpy as np
 
 
-class RiskScoreDefinitions(Scene):
+class RollingWindowRiskScoreScene(Scene):
+    """Run with: manim -pqh IntroVideo4.py RollingWindowRiskScoreScene"""
+
     def construct(self):
-        title = Text("Risk Score Indicator", weight=BOLD).to_edge(UP)
+        # -----------------------------
+        # Configuration
+        # -----------------------------
+        N_TOTAL = 170
+        N_INITIAL = 80
+        L = 60
+        W = 0.65
 
-        trend_eq = MathTex(
-            r"T_t = \frac{x_t - \min(x)}{\max(x) - \min(x)}"
-        ).scale(0.9)
-        momentum_eq = MathTex(
-            r"\mathrm{Mom}_t = \frac{1 + \frac{x_t - x_{t-1}}{\max(x)-\min(x)}}{2}"
-        ).scale(0.9)
-        combined_eq = MathTex(
-            r"RS_t = w\,T_t + (1-w)\,\mathrm{Mom}_t"
-        ).scale(0.9)
+        np.random.seed(7)
+        t = np.arange(N_TOTAL)
+        base = 1.8 * np.sin(t / 10.0) + 0.9 * np.sin(t / 23.0 + 1.4)
+        trend = 0.015 * t
+        noise = np.random.normal(scale=0.32, size=N_TOTAL)
+        x_vals = base + trend + noise
 
-        w_label = Tex(r"$w$: weight of trend component", color=YELLOW).scale(0.7)
+        # Precompute RS components for performance and stable animation
+        trend_vals = np.zeros(N_TOTAL)
+        mom_vals = np.zeros(N_TOTAL)
+        rs_vals = np.zeros(N_TOTAL)
 
-        equations = VGroup(trend_eq, momentum_eq, combined_eq, w_label).arrange(
-            DOWN, aligned_edge=LEFT, buff=0.45
+        for i in range(N_TOTAL):
+            start = max(0, i - L + 1)
+            window = x_vals[start : i + 1]
+            x_min = window.min()
+            x_max = window.max()
+            span = max(x_max - x_min, 1e-8)
+
+            t_i = (x_vals[i] - x_min) / span
+            if i == 0:
+                mom_i = 0.5
+            else:
+                mom_i = 0.5 * (1 + (x_vals[i] - x_vals[i - 1]) / span)
+
+            t_i = float(np.clip(t_i, 0, 1))
+            mom_i = float(np.clip(mom_i, 0, 1))
+            rs_i = float(np.clip(W * t_i + (1 - W) * mom_i, 0, 1))
+
+            trend_vals[i] = t_i
+            mom_vals[i] = mom_i
+            rs_vals[i] = rs_i
+
+        # -----------------------------
+        # Layout
+        # -----------------------------
+        title = Text("Rolling-Window Risk Score", font_size=38, weight=BOLD).to_edge(UP)
+
+        top_axes = Axes(
+            x_range=[1, N_TOTAL, 20],
+            y_range=[float(x_vals.min() - 0.8), float(x_vals.max() + 0.8), 1],
+            x_length=11.0,
+            y_length=2.6,
+            axis_config={"stroke_width": 2, "include_ticks": False},
+            tips=False,
         )
-        equations.next_to(title, DOWN, buff=0.7)
+        top_axes.to_edge(LEFT, buff=0.5).shift(UP * 1.2)
+        top_lbl = Text("Raw series  $x_t$", font_size=24).next_to(top_axes, UP, buff=0.15)
 
-        intuition = VGroup(
-            Text("Trend: position within range", font_size=28, color=BLUE_C),
-            Text("Momentum: recent change", font_size=28, color=GREEN_C),
-            Text("Combined: 1=high risk, 0=low risk", font_size=28, color=ORANGE),
-        ).arrange(DOWN, aligned_edge=LEFT, buff=0.2)
-        intuition.to_edge(DOWN).shift(UP * 0.3)
-
-        self.play(Write(title))
-        self.play(FadeIn(trend_eq, shift=UP * 0.2))
-        self.play(FadeIn(momentum_eq, shift=UP * 0.2))
-        self.play(FadeIn(combined_eq, shift=UP * 0.2), FadeIn(w_label, shift=UP * 0.2))
-
-        for line in intuition:
-            self.play(Write(line), run_time=0.7)
-
-        self.wait(1)
-        self.play(FadeOut(VGroup(title, equations, intuition)))
-
-
-class RiskScoreSeriesExample(Scene):
-    def _risk_series(self, values, w=0.65):
-        arr = np.array(values, dtype=float)
-        min_v, max_v = arr.min(), arr.max()
-        span = max(max_v - min_v, 1e-8)
-
-        trend = (arr - min_v) / span
-
-        momentum = np.zeros_like(arr)
-        momentum[0] = 0.5
-        momentum[1:] = (1 + (arr[1:] - arr[:-1]) / span) / 2
-
-        rs = w * trend + (1 - w) * momentum
-        return trend, momentum, rs
-
-    def _plot_series_group(self, title_text, raw_values, color, anchor):
-        trend, momentum, rs = self._risk_series(raw_values)
-        n = len(raw_values)
-
-        title = Text(title_text, font_size=30, color=color)
-        axes = Axes(
-            x_range=[1, n, 1],
+        bottom_axes = Axes(
+            x_range=[1, N_TOTAL, 20],
             y_range=[0, 1, 0.2],
-            x_length=5.2,
-            y_length=2.8,
-            axis_config={"include_numbers": False},
+            x_length=11.0,
+            y_length=2.6,
+            axis_config={"stroke_width": 2, "include_ticks": False},
+            tips=False,
         )
-        labels = axes.get_axis_labels(
-            Tex("t").scale(0.7), Tex("score").scale(0.7)
-        )
+        bottom_axes.next_to(top_axes, DOWN, buff=1.0)
+        bottom_lbl = Tex(r"Risk score  $RS_t \in [0,1]$").scale(0.7).next_to(bottom_axes, UP, buff=0.15)
 
-        trend_line = axes.plot_line_graph(
-            x_values=list(range(1, n + 1)), y_values=trend, line_color=BLUE_C, add_vertex_dots=False
-        )
-        mom_line = axes.plot_line_graph(
-            x_values=list(range(1, n + 1)), y_values=momentum, line_color=GREEN_C, add_vertex_dots=False
-        )
-        rs_line = axes.plot_line_graph(
-            x_values=list(range(1, n + 1)), y_values=rs, line_color=ORANGE, add_vertex_dots=False
-        )
+        x_coords = [top_axes.c2p(i + 1, x_vals[i]) for i in range(N_TOTAL)]
+        rs_coords = [bottom_axes.c2p(i + 1, rs_vals[i]) for i in range(N_TOTAL)]
 
-        tracker = ValueTracker(1)
-        moving_dot = always_redraw(
-            lambda: Dot(
-                axes.c2p(
-                    tracker.get_value(),
-                    np.interp(tracker.get_value(), np.arange(1, n + 1), rs),
-                ),
-                color=ORANGE,
-                radius=0.06,
+        index_tracker = ValueTracker(2)
+
+        def idx_now() -> int:
+            return int(np.clip(np.floor(index_tracker.get_value()), 2, N_TOTAL))
+
+        # -----------------------------
+        # Dynamic visuals
+        # -----------------------------
+        x_line = VMobject(color=BLUE_D, stroke_width=3)
+        rs_line = VMobject(color=ORANGE, stroke_width=3)
+
+        def update_x_line(mob):
+            i = idx_now()
+            mob.set_points_as_corners(x_coords[:i])
+            return mob
+
+        def update_rs_line(mob):
+            i = idx_now()
+            mob.set_points_as_corners(rs_coords[:i])
+            return mob
+
+        x_line.add_updater(update_x_line)
+        rs_line.add_updater(update_rs_line)
+
+        x_dot = always_redraw(lambda: Dot(x_coords[idx_now() - 1], radius=0.05, color=BLUE_D))
+        rs_dot = always_redraw(lambda: Dot(rs_coords[idx_now() - 1], radius=0.05, color=ORANGE))
+
+        window_box = always_redraw(
+            lambda: Polygon(
+                top_axes.c2p(max(1, idx_now() - L + 1), top_axes.y_range[0]),
+                top_axes.c2p(idx_now(), top_axes.y_range[0]),
+                top_axes.c2p(idx_now(), top_axes.y_range[1]),
+                top_axes.c2p(max(1, idx_now() - L + 1), top_axes.y_range[1]),
+                stroke_width=0,
+                fill_color=GREY_B,
+                fill_opacity=0.3,
             )
         )
 
-        legend = VGroup(
-            Dot(color=BLUE_C, radius=0.05), Tex("Trend").scale(0.55),
-            Dot(color=GREEN_C, radius=0.05), Tex("Momentum").scale(0.55),
-            Dot(color=ORANGE, radius=0.05), Tex("RS").scale(0.55),
-        ).arrange(RIGHT, buff=0.15)
-
-        panel = VGroup(title, VGroup(axes, labels), legend)
-        panel.arrange(DOWN, buff=0.15)
-        panel.move_to(anchor)
-
-        graph_group = VGroup(axes, labels, trend_line, mom_line, rs_line, moving_dot)
-        graph_group.move_to(panel[1].get_center())
-        legend.next_to(graph_group, DOWN, buff=0.15)
-        title.next_to(graph_group, UP, buff=0.2)
-
-        return VGroup(title, graph_group, legend), tracker, n
-
-    def construct(self):
-        intro = Text("Example: Inflation and Growth Risk Scores", font_size=34, weight=BOLD).to_edge(UP)
-        self.play(Write(intro))
-
-        inflation_values = [2.0, 2.4, 2.8, 3.4, 3.0, 3.8, 4.2]
-        growth_values = [3.6, 3.3, 3.0, 2.9, 2.5, 2.8, 2.2]
-
-        left_panel, left_tracker, left_n = self._plot_series_group(
-            "Inflation Risk", inflation_values, RED_C, LEFT * 3.2 + DOWN * 0.3
-        )
-        right_panel, right_tracker, right_n = self._plot_series_group(
-            "Growth Risk", growth_values, PURPLE_C, RIGHT * 3.2 + DOWN * 0.3
+        window_label = always_redraw(
+            lambda: Text("L=60 rolling window", font_size=18, color=GREY_D).next_to(window_box, UP, buff=0.08)
         )
 
-        self.play(FadeIn(left_panel), FadeIn(right_panel), run_time=1.2)
+        def minmax_points():
+            i = idx_now() - 1
+            start = max(0, i - L + 1)
+            win = x_vals[start : i + 1]
+            min_rel = int(np.argmin(win))
+            max_rel = int(np.argmax(win))
+            min_idx = start + min_rel
+            max_idx = start + max_rel
+            return min_idx, max_idx
 
-        step_text = Text("RS moves as trend and momentum evolve over time", font_size=26).to_edge(DOWN)
-        self.play(Write(step_text))
+        min_dot = always_redraw(lambda: Dot(x_coords[minmax_points()[0]], color=TEAL_C, radius=0.055))
+        max_dot = always_redraw(lambda: Dot(x_coords[minmax_points()[1]], color=RED_C, radius=0.055))
 
-        self.play(
-            left_tracker.animate.set_value(left_n),
-            right_tracker.animate.set_value(right_n),
-            run_time=5,
-            rate_func=linear,
+        min_tag = always_redraw(lambda: Text("min", font_size=16, color=TEAL_C).next_to(min_dot, DOWN, buff=0.05))
+        max_tag = always_redraw(lambda: Text("max", font_size=16, color=RED_C).next_to(max_dot, UP, buff=0.05))
+
+        # Equation and live values panel
+        eq_trend = MathTex(r"T_t = \frac{x_t-\min}{\max-\min}").scale(0.62)
+        eq_mom = MathTex(r"\mathrm{Mom}_t = 0.5\left(1+\frac{x_t-x_{t-1}}{\max-\min}\right)").scale(0.62)
+        eq_rs = MathTex(r"RS_t = w\,T_t + (1-w)\,\mathrm{Mom}_t", r",\; w=0.65").scale(0.62)
+
+        val_t_num = DecimalNumber(0.0, num_decimal_places=3, font_size=28, color=BLUE_D)
+        val_m_num = DecimalNumber(0.0, num_decimal_places=3, font_size=28, color=GREEN_D)
+        val_rs_num = DecimalNumber(0.0, num_decimal_places=3, font_size=28, color=ORANGE)
+
+        val_t_num.add_updater(lambda m: m.set_value(trend_vals[idx_now() - 1]))
+        val_m_num.add_updater(lambda m: m.set_value(mom_vals[idx_now() - 1]))
+        val_rs_num.add_updater(lambda m: m.set_value(rs_vals[idx_now() - 1]))
+
+        live_vals = VGroup(
+            VGroup(Text("T_t:", font_size=24), val_t_num).arrange(RIGHT, buff=0.15),
+            VGroup(Text("Mom_t:", font_size=24), val_m_num).arrange(RIGHT, buff=0.15),
+            VGroup(Text("RS_t:", font_size=24), val_rs_num).arrange(RIGHT, buff=0.15),
+        ).arrange(DOWN, aligned_edge=LEFT, buff=0.15)
+
+        eq_panel = VGroup(eq_trend, eq_mom, eq_rs, live_vals).arrange(
+            DOWN, aligned_edge=LEFT, buff=0.22
         )
+        eq_panel.to_edge(RIGHT, buff=0.4).shift(DOWN * 0.05)
 
-        outro = Text("Higher RS means higher perceived risk.", font_size=30, color=ORANGE)
-        outro.next_to(intro, DOWN, buff=0.35)
-        self.play(ReplacementTransform(step_text, outro))
-        self.wait(1.5)
+        # -----------------------------
+        # Animation sequence
+        # -----------------------------
+        self.play(FadeIn(title, shift=UP * 0.2))
+        self.play(Create(top_axes), FadeIn(top_lbl, shift=UP * 0.1), run_time=1.0)
+        self.play(Create(bottom_axes), FadeIn(bottom_lbl, shift=UP * 0.1), run_time=1.0)
 
+        self.play(Write(eq_trend), run_time=0.8)
+        self.play(Write(eq_mom), run_time=0.8)
+        self.play(Write(eq_rs), run_time=0.8)
+        self.play(FadeIn(live_vals, shift=RIGHT * 0.15), run_time=0.7)
 
-class RiskScoreExplainer(Scene):
-    def construct(self):
-        definition_card = RoundedRectangle(width=7.4, height=1.4, corner_radius=0.15, color=BLUE_E)
-        definition_text = Text("Step 1: Define components", font_size=30).move_to(definition_card)
-        card1 = VGroup(definition_card, definition_text)
+        self.add(window_box, window_label)
+        self.add(x_line, rs_line, x_dot, rs_dot, min_dot, max_dot, min_tag, max_tag)
 
-        formula_card = RoundedRectangle(width=7.4, height=1.4, corner_radius=0.15, color=GREEN_E)
-        formula_text = Text("Step 2: Combine with weight w", font_size=30).move_to(formula_card)
-        card2 = VGroup(formula_card, formula_text)
+        # Build first ~80 points
+        self.play(index_tracker.animate.set_value(N_INITIAL), run_time=4.5, rate_func=smooth)
 
-        visualize_card = RoundedRectangle(width=7.4, height=1.4, corner_radius=0.15, color=ORANGE)
-        visualize_text = Text("Step 3: Track RS through time", font_size=30).move_to(visualize_card)
-        card3 = VGroup(visualize_card, visualize_text)
+        # Conceptual bridge: emphasize RS equation -> bottom plot
+        rs_focus = SurroundingRectangle(eq_rs[0], color=ORANGE, buff=0.08)
+        arrow = Arrow(
+            rs_focus.get_left() + LEFT * 0.15,
+            bottom_axes.c2p(N_INITIAL - 6, 0.82),
+            color=ORANGE,
+            stroke_width=5,
+            max_tip_length_to_length_ratio=0.08,
+        )
+        self.play(Create(rs_focus), GrowArrow(arrow), run_time=0.8)
+        self.play(Indicate(rs_dot, color=ORANGE, scale_factor=1.5), run_time=0.6)
+        self.play(FadeOut(rs_focus), FadeOut(arrow), run_time=0.5)
 
-        self.play(FadeIn(card1, shift=UP * 0.3))
-        self.wait(0.4)
-        self.play(ReplacementTransform(card1, card2))
-        self.wait(0.4)
-        self.play(ReplacementTransform(card2, card3))
-        self.wait(0.6)
+        # New data arrivals until N_TOTAL
+        self.play(index_tracker.animate.set_value(N_TOTAL), run_time=6.5, rate_func=linear)
 
-        self.play(FadeOut(card3))
-
-        next_scene_text = Text("Render: RiskScoreDefinitions and RiskScoreSeriesExample", font_size=28)
-        self.play(Write(next_scene_text))
-        self.wait(1)
+        self.wait(1.2)
